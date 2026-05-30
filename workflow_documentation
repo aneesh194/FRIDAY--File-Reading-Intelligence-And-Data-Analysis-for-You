@@ -1,0 +1,154 @@
+# FileMind AI - System Architecture & Workflow Documentation
+
+Welcome to the official technical architecture and workflow specification for **FileMind AI**—a premium, local LLM-powered intelligence system designed to scan, analyze, index, and report on files, logs, images, and folders natively on your local CPU.
+
+This document provides a comprehensive technical overview of the system architecture, memory subsystems, data flow pipelines, component schemas, and engineering milestones achieved throughout this project.
+
+---
+
+## 1. High-Level System Architecture
+
+FileMind AI is engineered around a modular, low-latency pipeline that processes user queries, routes intents, interacts with persistent vector databases and sliding conversational memory, runs localized domain-specific file analyzers, and streams results in real time.
+
+```mermaid
+graph TD
+    User([USER]) -->|Natural Language Input| Main[main.py]
+    
+    %% Intent Routing
+    Main -->|Detect Intent| Router[utils/intent_router.py]
+    Router -->|General Chat / Question| GenBlock[General AI Block]
+    Router -->|Direct File/Folder Path| AnalyzeBlock[Analysis Router Block]
+    Router -->|Report Generation Command| ReportBlock[Report Generation Block]
+    
+    %% Memory Integration
+    GenBlock -->|Fetch Context| MemoryEngine[ai/ai_engine.py]
+    AnalyzeBlock -->|Scan Target| Analyzers[analyzers/*]
+    
+    %% Local LLM
+    MemoryEngine -->|Query Vector Store| DB[(ChromaDB Vector Memory)]
+    MemoryEngine -->|Query Conversational Store| Cache[(conversation_history.json)]
+    MemoryEngine -->|Send Isolated or Compiled Prompt| LLM[Llama Cpp / DeepSeek Coder 6.7B]
+    
+    %% Output
+    LLM -->|Stream UTF-8 Output| User
+    
+    %% Report & Persistent State
+    ReportBlock -->|Load Active Project Target| StateManager[reports/active_project.json]
+    ReportBlock -->|Trigger Analysis & Compile| ReportGen[report_generator/report_generator.py]
+    ReportGen -->|Save Premium Markdown Report| Disk[(Disk / User Directory)]
+```
+
+---
+
+## 2. Dynamic Data & Control Workflows
+
+### 2.1 The Conversational Chat Pipeline
+When the user submits a normal conversational query (e.g. *"Explain what machine learning is simply"*), the system executes the following data lifecycle:
+
+```mermaid
+sequenceDiagram
+    autonumber
+    actor User as USER
+    participant Main as main.py
+    participant Router as intent_router.py
+    participant Engine as ai_engine.py
+    participant ConvMem as conversation_memory.py
+    participant DB as persistent_memory.py (ChromaDB)
+    participant LLM as DeepSeek Coder (llama.cpp)
+
+    User->>Main: Enter Input ("Explain it in exactly 2 lines")
+    Main->>Router: detect_intent(text)
+    Note over Router: Checks for disk paths or report commands
+    Router-->>Main: Returns intent {"type": "general"}
+    Main->>Engine: ask_ai_stream(text, save_to_memory=True)
+    
+    par Query Conversational Context
+        Engine->>ConvMem: get_instruct_context()
+        ConvMem-->>Engine: Returns sliding chat history list
+    and Query Semantic Memory
+        Engine->>DB: search_memory(text)
+        Note over DB: Computes cosine similarity over CPU embeddings
+        DB-->>Engine: Returns relevant prior contexts
+    end
+
+    Engine->>Engine: Compile Prompt (System Instructions + Memories + History + Query)
+    Engine->>LLM: Stream Inference (Temperature=0.7, n_ctx=12288)
+    LLM-->>User: UTF-8 Stream Emojis & Text directly to Console stdout
+    LLM-->>Engine: Complete Response String
+    
+    par Commit Conversational Turn
+        Engine->>ConvMem: add_message("assistant", response)
+        Note over ConvMem: Saves turn to conversation_history.json
+    and Embed Persistent Memory
+        Engine->>DB: store_memory(turn_text)
+        Note over DB: Embeds and saves to ChromaDB SQLite index
+    end
+```
+
+---
+
+## 3. Memory Subsystems Deep-Dive
+
+FileMind AI maintains two distinct memory tracks to achieve both immediate context awareness and deep, session-spanning persistence:
+
+### 3.1 Short-Term Memory (Conversational Cache)
+* **File Location**: [reports/conversation_history.json](file:///d:/FileMind%20Project/reports/conversation_history.json)
+* **Data Schema**:
+  ```json
+  [
+      {
+          "role": "user",
+          "content": "hi"
+      },
+      {
+          "role": "assistant",
+          "content": "Hello👋, how can I assist you today?"
+      }
+  ]
+  ```
+* **Purpose**: Retains the immediate chat context (e.g. resolving pronouns like *"it"*, *"that function"*, or *"the error I just showed you"*).
+* **Self-Healing Capability**: The loader dynamically parses and upgrades legacy `{ "user": "...", "ai": "..." }` structures to standard `role`/`content` structures on launch, preventing crashes.
+
+### 3.2 Long-Term Memory (Persistent Semantic Vector DB)
+* **Engine**: ChromaDB SQLite Vector Index running entirely locally.
+* **Embeddings**: Natively generated on-device over historical inputs and assistant conclusions.
+* **Semantic Recall**: Automatically retrieves the most semantically relevant memories from prior session logs (e.g. searching *"Where was database connection handled?"* returns folder scan outputs from days prior).
+
+---
+
+## 4. Key System Components & Modules
+
+### 4.1 CLI Orchestrator (`main.py`)
+Acts as the central input-output loop.
+* Configures standard output console streams to handle global **UTF-8 encoding** to fully support emoji rendering on Windows.
+* Implements a **Session-Persistent State Manager** that loads and updates the active target state via [reports/active_project.json](file:///d:/FileMind%20Project/reports/active_project.json). This guarantees that even after a full application restart, typing `generate report` instantly remembers and processes your active workspace without requiring re-scans!
+
+### 4.2 Semantic Intent Router (`utils/intent_router.py`)
+Uses heuristics and directory scanning to distinguish user intent without needing expensive API calls:
+* Extracts longest contiguous substrings that represent actual physical paths on the user's computer, handling space-containing directory paths flawlessly (e.g. `D:\Error Explainer`).
+* Routes dynamically to `folder`, `code`, `document`, `log`, `image`, `report`, or `general` query execution loops.
+
+### 4.3 Premium Report Generator (`report_generator/report_generator.py`)
+Processes workspace analysis and compiles premium reports:
+* Categorizes files into structured statistics lists.
+* Performs AST (Abstract Syntax Tree) scanning on Python code to extract classes, functions, and FastAPI framework definitions.
+* Integrates PaddleOCR pipelines to extract embedded textual logs out of images.
+* Performs local document summarization loops over doc files.
+* Gathers error lists from log files and requests isolated master AI summaries to build gorgeous markdown files saved at the user's custom location.
+
+---
+
+## 5. Timeline of Advanced Engineering Victories
+
+The system underwent critical, battle-tested optimizations to reach its current state of pristine reliability:
+
+| Milestone / Issue Solved | Root Cause | Technical Resolution Implemented |
+| :--- | :--- | :--- |
+| **Legacy `role` KeyErrors** | Older conversation cache files stored user/AI messages using a legacy format that lacked the `"role"` key. | Refactored `get_history()` in `conversation_memory.py` to **self-heal and translate legacy structures** into compliant JSON objects on the fly. |
+| **Windows emoji crashes (`charmap` encoding error)** | Windows terminals (cmd/PowerShell) default stdout to standard `cp1252` encoding and crash if high-unicode emojis (like `👋` or `😊`) are streamed. | Added global standard output reconfiguration at the very top of `main.py`: `sys.stdout.reconfigure(encoding='utf-8')` to guarantee flawless UTF-8 console streaming. |
+| **ChromaDB Empty Metadata Warnings** | ChromaDB threw internal warnings when empty metadata dictionaries `{}` were supplied during document injections. | Fine-tuned `persistent_memory.py` to dynamically resolve empty dictionaries to clean `None` references, keeping vector memory logs warning-free. |
+| **Local Variable Scoping Crash (`unbound local 'os'`)** | `import os` was imported locally inside the `folder` analysis block in `main.py`, causing Python to treat `os` as a local function variable before it was bound. | Moved `os` globally to the top-level imports and cleaned out the redundant inner block declarations. |
+| **Context Length Exceeded (Prompt Overflows)** | Scanning complex directories combined with active chat history exceeded the default `4096` token context buffer. | 1. **Upgraded context window (`n_ctx`)** in `ai_engine.py` from `4096` to **`12288` tokens** to natively support mega-repository scans.<br>2. **Isolated Utility AI Calls**: Introduced the `include_history=False` flag for report generators so background helper tasks bypass large chat histories, keeping token counts strictly under 500-1,000 tokens for instantaneous processing! |
+
+---
+*FileMind AI Architecture & Workflow Document — Maintained locally in workspace.*
